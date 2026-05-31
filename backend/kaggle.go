@@ -22,6 +22,7 @@ type KagglePushReq struct {
 	EnableGpu          bool     `json:"enableGpu"`
 	EnableTpu          bool     `json:"enableTpu"`
 	EnableInternet     bool     `json:"enableInternet"`
+	MachineShape       string   `json:"machineShape,omitempty"`
 	DatasetDataSources []string `json:"datasetDataSources"`
 }
 
@@ -33,6 +34,7 @@ type kernelMeta struct {
 	KernelType     string   `json:"kernel_type"`
 	IsPrivate      bool     `json:"is_private"`
 	EnableGPU      bool     `json:"enable_gpu"`
+	MachineShape   string   `json:"machine_shape"`
 	EnableInternet bool     `json:"enable_internet"`
 	DatasetSources []string `json:"dataset_sources"`
 }
@@ -55,6 +57,9 @@ func pushKernel(agentDir string, wsURL string) {
 		"BACKEND_WS_URL": wsURL,
 	})
 	text := notebookForPush(codeBytes)
+	if meta.MachineShape != "" {
+		fmt.Println("machine shape:", meta.MachineShape)
+	}
 
 	// 4. Build the strict JSON request payload
 	reqPayload := KagglePushReq{
@@ -67,6 +72,7 @@ func pushKernel(agentDir string, wsURL string) {
 		EnableGpu:          meta.EnableGPU,
 		EnableTpu:          false,
 		EnableInternet:     meta.EnableInternet,
+		MachineShape:       meta.MachineShape,
 		DatasetDataSources: meta.DatasetSources,
 	}
 
@@ -149,7 +155,7 @@ func formatInjectionCell(vars map[string]string) string {
 	return b.String()
 }
 
-// injectNotebook replaces the first code cell containing "# Injection block".
+// injectNotebook appends injected variables to the injection cell (index 2).
 func injectNotebook(raw []byte, vars map[string]string) []byte {
 	var nb map[string]any
 	json.Unmarshal(raw, &nb)

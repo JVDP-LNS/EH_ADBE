@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -12,39 +13,60 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var queries = []string{
-	"What is 2+2? Answer in one short sentence.",
-	"Name one primary color. One word only.",
-}
-
 func main() {
+	if err := os.MkdirAll(genDir(), 0755); err != nil {
+		fmt.Println("failed to create gen dir:", err)
+		return
+	}
+
 	fmt.Println("starting server")
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		c, _ := up.Upgrade(w, r, nil)
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
 		fmt.Println("client connected")
 		defer fmt.Println("client disconnected")
 
-		_, b, _ := c.ReadMessage()
-		fmt.Println(string(b))
+		session := newWSSession(c)
+		defer session.close()
 
-		for _, q := range queries {
-			c.WriteMessage(websocket.TextMessage, []byte(q))
-			fmt.Printf("\n--- query: %s ---\n", q)
-			for {
-				_, b, err := c.ReadMessage()
-				if err != nil {
-					return
-				}
-				msg := string(b)
-				if msg == "END" {
-					fmt.Println()
-					break
-				}
-				fmt.Print(msg)
-			}
+		msg, err := session.recvText()
+		if err != nil {
+			fmt.Println("ready error:", err)
+			return
 		}
-		c.WriteMessage(websocket.TextMessage, []byte("DONE"))
+		fmt.Println(msg)
+
+		scanner := bufio.NewScanner(os.Stdin)
+		for {
+			fmt.Print("Enter prompt (or 'exit'): ")
+			if !scanner.Scan() {
+				break
+			}
+			q := strings.TrimSpace(scanner.Text())
+			if q == "" {
+				continue
+			}
+			if q == "exit" {
+				session.sendText("DONE")
+				break
+			}
+
+			if err := session.sendText(q); err != nil {
+				fmt.Println("send error:", err)
+				return
+			}
+			fmt.Printf("\n--- query: %s ---\n", q)
+
+			paths, err := recvImages(session)
+			if err != nil {
+				fmt.Println("recv error:", err)
+				return
+			}
+			fmt.Printf("received %d image(s)\n", len(paths))
+		}
 	})
 	go http.ListenAndServe(":8080", nil)
 

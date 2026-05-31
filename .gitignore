@@ -4,3 +4,6 @@
 .devnotes/
 # build artifacts
 bin/
+
+# generated images
+gen/*.png
