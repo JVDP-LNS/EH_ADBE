@@ -1,0 +1,6 @@
+.env
+.DS_Store
+
+.devnotes/
+# build artifacts
+bin/
