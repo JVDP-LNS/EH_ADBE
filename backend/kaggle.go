@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -39,27 +38,23 @@ type kernelMeta struct {
 	DatasetSources []string `json:"dataset_sources"`
 }
 
-func pushKernel(agentDir string, wsURL string) {
+func pushKernel(wsURL string) {
 	username := strings.TrimSpace(os.Getenv("KAGGLE_USERNAME"))
 	key := strings.TrimSpace(os.Getenv("KAGGLE_KEY"))
 
-	wd, _ := os.Getwd()
-	metaPath := filepath.Join(wd, "../agent/kernel-metadata.json")
+	metaPath := nbMetaDataPath
 	metaBytes, _ := os.ReadFile(metaPath)
 
 	var meta kernelMeta
 	json.Unmarshal(metaBytes, &meta)
 	meta.ID = fmt.Sprintf("%s/%s", username, meta.ID)
 
-	codePath := filepath.Join(wd, "../agent", meta.CodeFile)
-	codeBytes, _ := os.ReadFile(codePath)
-	codeBytes = injectNotebook(codeBytes, map[string]string{
+	injectionVars := map[string]string{
 		"BACKEND_WS_URL": wsURL,
-	})
-	text := notebookForPush(codeBytes)
-	if meta.MachineShape != "" {
-		fmt.Println("machine shape:", meta.MachineShape)
 	}
+	codePath := nbCodePath
+	codeBytes, _ := os.ReadFile(codePath)
+	text := injectNotebook(codeBytes, injectionVars)
 
 	// 4. Build the strict JSON request payload
 	reqPayload := KagglePushReq{
@@ -81,71 +76,29 @@ func pushKernel(agentDir string, wsURL string) {
 	kaggleAPI := "https://www.kaggle.com/api/v1/kernels/push"
 
 	req, _ := http.NewRequest(http.MethodPost, kaggleAPI, bytes.NewReader(payloadBytes))
-	// req.SetBasicAuth(username, key)
-	// Send the KCAT_ token as a Bearer token instead of Basic Auth
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "kaggle-api/v1.7.0")
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		fmt.Println("Request failed:", err)
+	resp, _ := http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Println("Kaggle push failed:", string(body))
 		return
 	}
 	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != 200 {
-		fmt.Printf("HTTP Error %d: %s\n", resp.StatusCode, string(body))
-		return
-	}
-
+	
 	var out struct {
 		URL   string `json:"url"`
 		Error string `json:"error"`
 		Ref   string `json:"ref"`
 	}
+	body, _ := io.ReadAll(resp.Body)
 	_ = json.Unmarshal(body, &out)
 
-	if out.Error != "" {
-		fmt.Println("Kaggle returned error:", out.Error)
-	} else {
-		fmt.Println("Kaggle pushed successfully:", out.URL)
-	}
+	fmt.Println("Kaggle pushed successfully:", out.URL)
 }
 
-func notebookForPush(raw []byte) string {
-	var nb map[string]any
-	json.Unmarshal(raw, &nb)
-
-	for _, c := range nb["cells"].([]any) {
-		cell, _ := c.(map[string]any)
-		if cell["cell_type"] == "code" {
-			cell["outputs"] = []any{}
-			cell["execution_count"] = nil
-		}
-	}
-
-	meta, _ := nb["metadata"].(map[string]any)
-	if meta == nil {
-		meta = map[string]any{}
-		nb["metadata"] = meta
-	}
-	if _, ok := meta["kernelspec"]; !ok {
-		meta["kernelspec"] = map[string]any{
-			"display_name": "Python 3",
-			"language":     "python",
-			"name":         "python3",
-		}
-	}
-
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.Encode(nb)
-	return buf.String()
-}
 
 func formatInjectionCell(vars map[string]string) string {
 	var b strings.Builder
@@ -155,18 +108,14 @@ func formatInjectionCell(vars map[string]string) string {
 	return b.String()
 }
 
-// injectNotebook appends injected variables to the injection cell (index 2).
-func injectNotebook(raw []byte, vars map[string]string) []byte {
+func injectNotebook(raw []byte, vars map[string]string) string {
 	var nb map[string]any
 	json.Unmarshal(raw, &nb)
 
 	body := formatInjectionCell(vars)
-	injectionCell := nb["cells"].([]any)[2].(map[string]any)
+	injectionCell := nb["cells"].([]any)[1].(map[string]any)
 	injectionCell["source"] = append(injectionCell["source"].([]any), body)
 
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.Encode(nb)
-	return buf.Bytes()
+	b, _ := json.Marshal(nb)
+	return string(b)
 }
